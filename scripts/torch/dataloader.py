@@ -223,8 +223,7 @@ def get_loader(root_gt:str,root_dicom :str,axis='lax',mode='train'):
     if mode == 'train':
         data_loader = data.DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4)
     else:
-        data_loader = data.DataLoader(
-            dataset=dataset, batch_size=1, shuffle=False, num_workers=4)
+        data_loader = data.DataLoader(dataset=dataset, batch_size=1, shuffle=False, num_workers=4)
 
     return data_loader
 

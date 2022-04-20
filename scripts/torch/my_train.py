@@ -40,7 +40,8 @@ import argparse
 import time
 import numpy as np
 import torch
-from dataloader import get_loader
+from dataloader import get_loader, UKB_SAX_IMG
+from torch.utils import data
 
 # import voxelmorph with pytorch backend
 os.environ['VXM_BACKEND'] = 'pytorch'
@@ -80,7 +81,7 @@ parser.add_argument('--dec', type=int, nargs='+',
                     help='list of unet decorder filters (default: 32 32 32 32 32 16 16)')
 parser.add_argument('--int-steps', type=int, default=7,
                     help='number of integration steps (default: 7)')
-parser.add_argument('--int-downsize', type=int, default=2,
+parser.add_argument('--int-downsize', type=int, default=1,
                     help='flow downsample factor for integration (default: 2)')
 parser.add_argument('--bidir', action='store_true', help='enable bidirectional cost function')
 
@@ -97,7 +98,8 @@ data_dicom = '/usr/not-backed-up/scnb/data/dicom_lsax_5k/'
 model_dir = '/usr/not-backed-up/scnb/'
 dvc = 'cuda:1'
 # load and prepare training data
-train_loader = get_loader(root_gt=data_dir,root_dicom = data_dicom, axis='sax',mode='train')
+dataset = UKB_SAX_IMG(root_gt= data_dir,root_dicom = data_dicom,mode='train',num_of_frames=10)
+train_loader = data.DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4)
 
 def grad(y_pred):
         dy = torch.abs(y_pred[:, :, 1:, :] - y_pred[:, :, :-1, :])
@@ -219,6 +221,7 @@ for epoch in range(args.initial_epoch, args.epochs):
             loss_list = []
             for n, loss_function in enumerate(losses):
                 if n == 1:
+                    print(y_pred[1].shape)
                     curr_loss = grad(y_pred=y_pred[n]) * weights[n]
                     loss_list.append(curr_loss.item())
                     loss += curr_loss
