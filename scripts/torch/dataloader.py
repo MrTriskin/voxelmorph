@@ -21,26 +21,6 @@ def get_indexs(seg_tps:list,tg:int):
     indexs.sort()
     return indexs
 
-def readable_dicom(dicom_dict):
-    tmp_img_list = ['{}time{}/SAX/0005'.format(dicom_dict['img_dir'],"%03d" %(j)) for j in dicom_dict['indexs']]     
-    for i in tmp_img_list:
-        try:
-            x = dicom.read_file(i).pixel_array
-        except:
-            print('CANT READ: {}'.format(i))
-            return False
-    return True
-
-def readable_png(png_dict):
-    tmp_seg_list = ['{}{}/masks/{}/0005.png'.format(png_dict['gt_dir'],j, k) for j in [png_dict['seg_tps'][0],png_dict['seg_tps'][-1]] for k in ['RVendo','LVendo','LVepi'] ]
-    for i in tmp_seg_list:
-        try:
-            x = imageio.imread(i)
-        except:
-            print('CANT READ: {}'.format(i))
-            return False
-    return True
-
 def getROI(rvendo,lvepi):
     x = imageio.imread(rvendo)
     
@@ -94,65 +74,50 @@ class UKB_SAX_IMG(data.Dataset):
         self.resize_to = (128,128)
         self.no_seg = []
         self.with_seg = []
+        self.sequence_list = []
         
-        # Check for pre-saved id list 
-        if os.path.isfile('./patient_ids.npy'):
-            patient_ids = np.load('./patient_ids.npy')
-        # Set reload flag as TRUE 
-            reload_flg = True 
-        else:
-            # get patients' ID from root (/dataset)
-            patient_ids = os.listdir(self.root_gt)
-        print("Total number of patients is: {}...".format(len(patient_ids)))
-        # walk through all patient's folder, remove sample if it dose not contain gt segmentation.
-        patient_ids_new = []
-        for i in patient_ids:
-            if reload_flg:
-                # Get gt frame number
-                # REF gt_dir/image&mask/time/masks/RVendo/LVendo/LVepi
-                gt_dir = "{}{}/image&mask/".format(self.root_gt,i)
-                seg_tps = os.listdir(gt_dir)
-                # under cine, image is DICOM 
-                # REF img_dir/id/time00x/SAX/0005
-                img_dir = "{}{}/".format(self.root_dicom,i)
-                patient_id = i 
-                seg = True 
-                indexs = get_indexs(seg_tps,self.num_of_frames)
-                instance_dict = {'id':patient_id, 'has_seg':seg, 'img_dir':img_dir, 'gt_dir':gt_dir, 'seg_tps':seg_tps, 'indexs':indexs}
-                self.with_seg.append(instance_dict)
-                patient_ids_new.append(i)
-            else:
-                # Check if both dicom and segs are exist
-                has_dicom = os.path.isdir('{}{}'.format(self.root_dicom,i))
-                if  has_dicom:
-                    # Get gt frame number
-                    # REF gt_dir/image&mask/time/masks/RVendo/LVendo/LVepi
-                    gt_dir = "{}{}/image&mask/".format(self.root_gt,i)
-                    seg_tps = os.listdir(gt_dir)
-                    # under cine, image is DICOM 
-                    # REF img_dir/id/time00x/SAX/0005
-                    img_dir = "{}{}/".format(self.root_dicom,i)
-                    patient_id = i 
-                    if len(seg_tps) == 2 and len(os.listdir(img_dir)) >= 50:
-                        # Assume all patient has 50 frames of MRI scans
-                        seg = True 
-                        indexs = get_indexs(seg_tps,self.num_of_frames)
-                        instance_dict = {'id':patient_id, 'has_seg':seg, 'img_dir':img_dir, 'gt_dir':gt_dir, 'seg_tps':seg_tps, 'indexs':indexs}
-                        if readable_dicom(instance_dict) and readable_png(instance_dict):
-                            self.with_seg.append(instance_dict)
-                            patient_ids_new.append(i)
-                else:
-                    print('For case {}, root_dicom: {}...'.format(i, has_dicom))
-        print('The number of no-seg samples is: {}...'.format(len(self.no_seg)))
-        print('The total number of seg samples is: {}...'.format(len(self.with_seg)))
-        if not os.path.isfile('./patient_ids.py'):
-            print('Saving clean patient id list...')
-            np.save('./patient_ids.npy',patient_ids_new)
-        if mode == 'train':
-            self.with_seg = self.with_seg[0:4600]
-        if mode == 'test':
-            self.with_seg = self.with_seg[4600:4690]
+        # *Check for pre-saved id list 
+        patient_ids = np.load('./patient_ids.npy')
+        print('Loaded patient id list from local file...')
+        all_patients = []
+        for c,id in enumerate(patient_ids) :
+            # *Get gt frame number
+            # *REF gt_dir/image&mask/time/masks/RVendo/LVendo/LVepi
+            gt_dir = "{}{}/image&mask/".format(self.root_gt,id)
+            seg_tps = os.listdir(gt_dir)
+            # *under cine, image is DICOM 
+            # *REF img_dir/id/time00x/SAX/0005
+            img_dir = "{}{}/".format(self.root_dicom,id)
+            if os.path.isdir(img_dir):
+                if len(seg_tps) == 2 and len(os.listdir(img_dir)) >= 50:
+                    patient_id = id 
+                    seg = True 
+                    indexs = get_indexs(seg_tps,self.num_of_frames)
+                    instance_dict = {'id':patient_id, 'has_seg':seg, 'img_dir':img_dir, 'gt_dir':gt_dir, 'seg_tps':seg_tps, 'indexs':indexs}
+                    all_patients.append(instance_dict)   
+        print(f'num of patient: {len(all_patients)}')
+        # *centre crop instead
+        [r_min, r_max, c_min, c_max] = [43, 171, 7, 135]
+        for patient in all_patients:
+            max_lenth_dicom = len(os.listdir("{}{}/SAX".format(patient['img_dir'],patient['seg_tps'][0])))-1
+            bbx_list = ['{}{}/masks/{}/{}.png'.format(patient['gt_dir'],j, k,"%04d" %(5))  for j in [patient['seg_tps'][0],patient['seg_tps'][-1]] for k in ['RVendo','LVendo','LVepi'] ]
+            # r_min, r_max, c_min, c_max = getROI(bbx_list[0],bbx_list[2])
+            # avg += [r_min,r_max,c_min,c_max]
+            # r_min -= 20 
+            # c_min -= 20
+            # assert r_min>=0 and c_min>=0
+            # r_max += 20
+            # c_max += 20
             
+            for i in range(2,8):
+                tmp_img_list = ['{}time{}/SAX/{}'.format(patient['img_dir'],"%03d" %(j),"%04d" %(max_lenth_dicom-i+1)) for j in patient['indexs']]
+                tmp_seg_list = ['{}{}/masks/{}/{}.png'.format(patient['gt_dir'],j, k,"%04d" %(i))  for j in [patient['seg_tps'][0],patient['seg_tps'][-1]] for k in ['RVendo','LVendo','LVepi'] ]
+                self.sequence_list.append({'imgs':tmp_img_list,'masks':tmp_seg_list, 'pid':patient['id'], 'bbx':[r_min,r_max,c_min,c_max]})     
+        if mode == 'train':
+            self.loader_ready = self.sequence_list[0:3000*6]
+        if mode == 'test':
+            self.loader_ready = self.sequence_list[3000*6:3000*6+600*6]
+                
     def make_seg_gt(self,segs):
         # *INPUT: 6*H*W 
         # *OUTPUT: 2*4*H*W 
@@ -196,19 +161,18 @@ class UKB_SAX_IMG(data.Dataset):
         }
         Transform_train = Transform['train']
         Transform_seg = Transform['seg']
-        assert self.with_seg[index]['has_seg'], "Oh no! This sample dose not have segmentations!"
-        tmp_img_list = ['{}time{}/SAX/0005'.format(self.with_seg[index]['img_dir'],"%03d" %(j)) for j in self.with_seg[index]['indexs']]
-        tmp_seg_list = ['{}{}/masks/{}/0005.png'.format(self.with_seg[index]['gt_dir'],j, k)  for j in [self.with_seg[index]['seg_tps'][0],self.with_seg[index]['seg_tps'][-1]] for k in ['RVendo','LVendo','LVepi'] ]
-        r_min, r_max, c_min, c_max = getROI(tmp_seg_list[3],tmp_seg_list[5])
-        img = torch.cat([Transform_train(np.float32(dicom.read_file(i).pixel_array[r_min-10:r_max+10,c_min-10:c_max+10])) for i in tmp_img_list],0)
-        # seg = torch.cat([Transform_seg(np.float32(fill_seg(imageio.imread(i))[r_min-10:r_max+10,c_min-10:c_max+10]/255.)) for i in tmp_seg_list],0)
-        # seg = self.make_seg_gt(seg)
+        sample = self.loader_ready[index]
+        img = torch.cat([Transform_train(np.float32(dicom.read_file(i).pixel_array[sample['bbx'][0]:sample['bbx'][1],sample['bbx'][2]:sample['bbx'][3]])) for i in sample['imgs']],0)
+        seg = torch.cat([Transform_seg(np.float32(fill_seg(imageio.imread(i))[sample['bbx'][0]:sample['bbx'][1],sample['bbx'][2]:sample['bbx'][3]]/255.)) for i in sample['masks']],0)
+        seg = self.make_seg_gt(seg)
         moving = img[0:1,...].repeat(9,1,1,1)
         fixed = img[1:,...].unsqueeze(1)
-        return moving, fixed
+        info = [sample['pid'], sample['bbx'], sample['imgs'], sample['masks']]
+
+        return moving, fixed, seg, info
 
     def __len__(self):
-        return len(self.with_seg)
+        return len(self.loader_ready)
 
 
 
@@ -226,6 +190,25 @@ def get_loader(root_gt:str,root_dicom :str,axis='lax',mode='train'):
         data_loader = data.DataLoader(dataset=dataset, batch_size=1, shuffle=False, num_workers=4)
 
     return data_loader
+
+if __name__ == '__main__':
+    data_dir = '/usr/not-backed-up/scnb/data/masks_sax_5k/'
+    data_dicom = '/usr/not-backed-up/scnb/data/dicom_lsax_5k/'
+    train_loader = get_loader(root_gt=data_dir,root_dicom = data_dicom, axis='sax',mode='train')
+    for ind, item in enumerate(train_loader):
+        print(f'{ind+1}/{len(train_loader)}')
+        print(item[0].shape)
+        print(item[1].shape)
+
+        # print(item[1][0:1,...].shape)>
+        # print(torch.min(item[1][0:1,0,3,...]))
+        # print(torch.max(item[1][0:1,0,3,...]))
+        # print(item[1].shape)
+        # plot = torch.sum(item[1][0,0,0:3,...],dim=0)
+        # plt.imshow(plot)
+        # plt.show()
+        # save_segs(img=item[1][0:1,...],id='gt_x_{}'.format(ind), cmap='coolwarm')
+        pass
 
 # data_dir = '/usr/not-backed-up/scnb/data/masks_sax_5k/'
 # data_dicom = '/usr/not-backed-up/scnb/data/dicom_lsax_5k/'

@@ -42,6 +42,7 @@ import numpy as np
 import torch
 from dataloader import get_loader, UKB_SAX_IMG
 from torch.utils import data
+from tqdm import tqdm
 
 # import voxelmorph with pytorch backend
 os.environ['VXM_BACKEND'] = 'pytorch'
@@ -63,7 +64,7 @@ parser.add_argument('--multichannel', action='store_true',
 # training parameters
 parser.add_argument('--gpu', default='0', help='GPU ID number(s), comma-separated (default: 0)')
 parser.add_argument('--batch-size', type=int, default=16, help='batch size (default: 1)')
-parser.add_argument('--epochs', type=int, default=50,
+parser.add_argument('--epochs', type=int, default=20,
                     help='number of training epochs (default: 1500)')
 parser.add_argument('--steps-per-epoch', type=int, default=100,
                     help='frequency of model saves (default: 100)')
@@ -96,10 +97,10 @@ bidir = args.bidir
 data_dir = '/usr/not-backed-up/scnb/data/masks_sax_5k/'
 data_dicom = '/usr/not-backed-up/scnb/data/dicom_lsax_5k/'
 model_dir = '/usr/not-backed-up/scnb/'
-dvc = 'cuda:1'
+dvc = 'cuda:2'
 # load and prepare training data
 dataset = UKB_SAX_IMG(root_gt= data_dir,root_dicom = data_dicom,mode='train',num_of_frames=10)
-train_loader = data.DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4)
+train_loader = data.DataLoader(dataset=dataset, batch_size=8, shuffle=True, num_workers=4)
 
 def grad(y_pred):
         dy = torch.abs(y_pred[:, :, 1:, :] - y_pred[:, :, :-1, :])
@@ -148,6 +149,7 @@ dec_nf = args.dec if args.dec else [32, 32, 32, 32, 32, 16, 16]
 
 if args.load_model:
     # load initial model (if specified)
+    print(f'Loading model from {args.load_model}')
     model = vxm.networks.VxmDense.load(args.load_model, device)
 else:
     # otherwise configure new model
@@ -193,54 +195,53 @@ weights += [args.weight]
 
 # training loops
 for epoch in range(args.initial_epoch, args.epochs):
-
+    with tqdm(total=len(train_loader), desc=f'Epoch {epoch + 1}/{args.epochs}', unit='batch') as pbar:
     # save model checkpoint
-    if epoch % 20 == 0:
-        model.save(os.path.join(model_dir, '%04d.pt' % epoch))
+        if epoch % 20 == 0:
+            model.save(os.path.join(model_dir, '%04d.pt' % epoch))
 
-    epoch_loss = []
-    epoch_total_loss = []
-    epoch_step_time = []
-    for ind, items in enumerate(train_loader):
+        epoch_loss = []
+        epoch_total_loss = []
+        epoch_step_time = []
+        for ind, items in enumerate(train_loader):
+            step_start_time = time.time()
+            pbar.update(1)
+            # generate inputs (and true outputs) and convert them to tensors
+            movings, fixeds, _, _ = items
+            movings = movings.to(device)
+            fixeds = fixeds.to(device)
+            for t in range(movings.size(1)):
+                inputs = movings[:,t,...]
+                y_true = fixeds[:,t,...]
 
-        step_start_time = time.time()
+                # run inputs through the model to produce a warped image and flow field
+                y_pred = model(inputs,y_true)
+                # print(y_pred[1].shape)
+                # calculate total loss
+                loss = 0
+                loss_list = []
+                for n, loss_function in enumerate(losses):
+                    if n == 1:
+                        # print(y_pred[1].shape)
+                        curr_loss = grad(y_pred=y_pred[n]) * weights[n]
+                        loss_list.append(curr_loss.item())
+                        loss += curr_loss
+                    else:
+                        curr_loss = loss_function(y_true, y_pred[n]) * weights[n]
+                        loss_list.append(curr_loss.item())
+                        loss += curr_loss
 
-        # generate inputs (and true outputs) and convert them to tensors
-        movings, fixeds = items
-        movings = movings.to(device)
-        fixeds = fixeds.to(device)
-        for t in range(movings.size(1)):
-            inputs = movings[:,t,...]
-            y_true = fixeds[:,t,...]
+            epoch_loss.append(loss_list)
+            epoch_total_loss.append(loss.item())
 
-            # run inputs through the model to produce a warped image and flow field
-            y_pred = model(inputs,y_true)
-            # print(y_pred[1].shape)
-            # calculate total loss
-            loss = 0
-            loss_list = []
-            for n, loss_function in enumerate(losses):
-                if n == 1:
-                    print(y_pred[1].shape)
-                    curr_loss = grad(y_pred=y_pred[n]) * weights[n]
-                    loss_list.append(curr_loss.item())
-                    loss += curr_loss
-                else:
-                    curr_loss = loss_function(y_true, y_pred[n]) * weights[n]
-                    loss_list.append(curr_loss.item())
-                    loss += curr_loss
-
-        epoch_loss.append(loss_list)
-        epoch_total_loss.append(loss.item())
-
-        # backpropagate and optimize
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        # if ind % 20 == 0:
-        #     print(f'E {epoch} ind {ind} loss: {loss}')
-        # get compute time
-        epoch_step_time.append(time.time() - step_start_time)
+            # backpropagate and optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            # if ind % 20 == 0:
+            #     print(f'E {epoch} ind {ind} loss: {loss}')
+            # get compute time
+            epoch_step_time.append(time.time() - step_start_time)
 
     # print epoch info
     epoch_info = 'Epoch %d/%d' % (epoch + 1, args.epochs)
@@ -250,4 +251,4 @@ for epoch in range(args.initial_epoch, args.epochs):
     print(' - '.join((epoch_info, time_info, loss_info)), flush=True)
 
 # final model save
-model.save(os.path.join(model_dir, '%04d.pt' % args.epochs))
+model.save(os.path.join(model_dir, 'vxmorph_%04d.pt' % args.epochs))
