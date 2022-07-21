@@ -89,7 +89,7 @@ parser.add_argument('--bidir', action='store_true', help='enable bidirectional c
 # loss hyperparameters
 parser.add_argument('--image-loss', default='mse',
                     help='image reconstruction loss - can be mse or ncc (default: mse)')
-parser.add_argument('--lambda', type=float, dest='weight', default=0.01,
+parser.add_argument('--lambda', type=float, dest='weight', default=0.001,
                     help='weight of deformation loss (default: 0.01)')
 args = parser.parse_args()
 
@@ -97,7 +97,7 @@ bidir = args.bidir
 data_dir = '/usr/not-backed-up/scnb/data/masks_sax_5k/'
 data_dicom = '/usr/not-backed-up/scnb/data/dicom_lsax_5k/'
 model_dir = '/usr/not-backed-up/scnb/'
-dvc = 'cuda:2'
+dvc = 'cuda:7'
 # load and prepare training data
 dataset = UKB_SAX_IMG(root_gt= data_dir,root_dicom = data_dicom,mode='train',num_of_frames=10)
 train_loader = data.DataLoader(dataset=dataset, batch_size=8, shuffle=True, num_workers=4)
